@@ -19,7 +19,7 @@ public class MqttSubscriberPublisher implements MqttCallbackExtended {
     private IMqttClient publisherClient;
     private String subscribeTopic = "spBv1.0/BT00/NDATA/GW2.0";
     private String publishTopic = "topicB";
-    private String brokerUrl = "tcp://localhost:1883"; // Byt ut vid behov
+    private String brokerUrl = "tcp://192.168.20.10:1883"; // Byt ut vid behov
     private String clientIdSubscriber = "JavaSubscriber";
     private String clientIdPublisher = "JavaPublisher";
 
