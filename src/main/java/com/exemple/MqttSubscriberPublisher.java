@@ -71,27 +71,43 @@ public class MqttSubscriberPublisher implements MqttCallbackExtended {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) throws Exception {
-        System.out.println("Meddelande mottaget i ämne: " + topic);
+        //System.out.println("Meddelande mottaget i ämne: " + topic);
         byte[] payload = message.getPayload();
-        //System.out.println("Rå payload (hex): " + bytesToHex(payload));
 
         SparkplugBPayloadDecoder decoder = new SparkplugBPayloadDecoder();
         try {
             SparkplugBPayload inboundPayload = decoder.buildFromByteArray(payload, null);
-            System.out.println("Avkodat Sparkplug B-meddelande:");
 
             ObjectMapper mapper = new ObjectMapper();
             mapper.setSerializationInclusion(Include.NON_NULL);
-            String payloadString = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(inboundPayload);
-            System.out.println(payloadString);
+            String payloadString = mapper.writeValueAsString(inboundPayload); // Konvertera Sparkplug B till JSON-sträng
+            //System.out.println("Avkodat Sparkplug B-meddelande (JSON):");
+            //System.out.println(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(mapper.readValue(payloadString, Object.class))); // Pretty print JSON
 
-            // Publicera det avkodade meddelandet (som JSON) till topic B
-            publishMessage(payloadString.getBytes());
+            // Analysera JSON för att hitta ett metrik-namn som innehåller "RcdMade"
+            boolean executeScript = false;
+            if (inboundPayload.getMetrics() != null) {
+                for (org.eclipse.tahu.message.model.Metric metric : inboundPayload.getMetrics()) {
+                    if (metric.getName() != null && metric.getName().contains("RcdMade")) {
+                        executeScript = true;
+                        break;
+                    }
+                }
+            }
+
+            if (executeScript) {
+                System.out.println("Hittade ett metrik-namn som innehåller 'RcdMade'. Exekverar skriptet asynkront...");
+                executeArchiveSyncScript();
+            } else {
+                //System.out.println("Inget metrik-namn innehöll 'EK1'. Skriptet kommer inte att exekveras.");
+                // Här kan du eventuellt lägga till logik för att publicera det ursprungliga meddelandet vidare om det behövs
+                publishMessage(payload); // Publicera det ursprungliga Sparkplug B-meddelandet
+            }
 
         } catch (Exception e) {
-            System.err.println("Fel vid avkodning av Sparkplug B-meddelande: " + e.getMessage());
+            System.err.println("Fel vid hantering av meddelande: " + e.getMessage());
             e.printStackTrace();
-            // Hantera felaktiga Sparkplug B-meddelanden här om det behövs
+            // Hantera felaktiga meddelanden här
         }
     }
 
@@ -113,11 +129,52 @@ public class MqttSubscriberPublisher implements MqttCallbackExtended {
         message.setQos(0); // Quality of Service nivå
         try {
             publisherClient.publish(publishTopic, message);
-            System.out.println("Avkodat meddelande (som JSON) publicerat till ämne: " + publishTopic);
+            //System.out.println("Avkodat meddelande (som JSON) publicerat till ämne: " + publishTopic);
         } catch (MqttException me) {
             System.err.println("Fel vid publicering: " + me.getMessage());
             me.printStackTrace();
         }
+    }
+
+    private void executeArchiveSyncScript() {
+        String scriptPath = "/home/fn/ArchiveSync/runArchiveSync.sh";
+        new Thread(() -> {
+            try {
+                System.out.println("Startar skriptet '" + scriptPath + "' i en separat tråd...");
+                ProcessBuilder processBuilder = new ProcessBuilder("bash", scriptPath);
+                Process process = processBuilder.start();
+
+                // Läs ut skriptets output (valfritt)
+                java.io.BufferedReader stdInput = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()));
+                String s;
+                System.out.println("Utskrift från skriptet:");
+                while ((s = stdInput.readLine()) != null) {
+                    System.out.println(s);
+                }
+
+                // Läs ut eventuella fel från skriptet
+                java.io.BufferedReader stdError = new java.io.BufferedReader(new java.io.InputStreamReader(process.getErrorStream()));
+                System.err.println("Fel från skriptet:");
+                while ((s = stdError.readLine()) != null) {
+                    System.err.println(s);
+                }
+
+                int exitCode = process.waitFor();
+                System.out.println("Skriptet '" + scriptPath + "' avslutades med kod: " + exitCode);
+
+                if (exitCode != 0) {
+                    System.err.println("Skriptet avslutades med felkod: " + exitCode);
+                }
+
+            } catch (java.io.IOException e) {
+                System.err.println("Fel vid exekvering av skriptet: " + e.getMessage());
+                e.printStackTrace();
+            } catch (InterruptedException e) {
+                System.err.println("Exekvering av skriptet avbröts: " + e.getMessage());
+                Thread.currentThread().interrupt();
+            }
+        }).start();
+        System.out.println("Skriptet '" + scriptPath + "' har startats asynkront.");
     }
 
     public static void main(String[] args) {
